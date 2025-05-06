@@ -1,7 +1,7 @@
 import subprocess
 
 def run_command(command):
-    """Runs a shell command and prints output."""
+    """Runs a shell command and prints output. """
     try:
         subprocess.run(command, check=True, shell=True)
         print(f"Command '{command}' executed successfully.")
