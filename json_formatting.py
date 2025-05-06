@@ -21,7 +21,7 @@ response = {
         'message': {
             'role': 'assistant',
             'content': '''
-Here are 10 of the best-rated cheap iPhone 14 cases available on Shopee Philippines, with the relevant specifications, ratings, prices, product names, product and image links provided as text for easy reference. Detailed specifications are listed when available.
+Here are 10 of the best-rated cheap iPhone 13 cases available on Shopee Philippines, with the relevant specifications, ratings, prices, product names, product and image links provided as text for easy reference. Detailed specifications are listed when available.
 
 ## Best Rated Cheap iPhone 14 Cases on Shopee Philippines
 
