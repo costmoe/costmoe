@@ -43,11 +43,21 @@ import pymysql
 import uuid
 import time
 
+from difflib import SequenceMatcher
+from .models import Products
+
+
 
 def products_api(request):
     user_id = request.session.get('user_id', 'na') 
     username = request.session.get('username', 'na') 
-    products = Products.objects.filter(user_id=user_id, m_status="active").order_by('-product_id').values()
+    products = Products.objects.exclude(m_status="delete").order_by('-product_id').values()
+    return JsonResponse(list(products), safe=False)
+
+def products_api_c(request):
+    user_id = request.session.get('user_id', 'na') 
+    username = request.session.get('username', 'na') 
+    products = ProductUserView.objects.filter(user_id=user_id, m_status="active").order_by('-product_id').values()
     return JsonResponse(list(products), safe=False)
 
 def send_otp_email(request, email):
@@ -232,9 +242,35 @@ def fetch_products(request):
     conn.close()
     return JsonResponse({'status': 'done', 'inserted': inserted_total})
 
+def get_similarity(a, b):
+    """Return similarity score between two strings as a percentage."""
+    return round(SequenceMatcher(None, a.lower(), b.lower()).ratio() * 100, 2)
+
+def find_similar_products(product_name, threshold=50):
+    """
+    Compare product_name to all products in the DB and return a list
+    of similar products with their similarity scores.
+    """
+    similar_products = []
+    all_products = Products.objects.all()
+
+    for product in all_products:
+        score = get_similarity(product_name, product.product_name)
+        if score >= threshold:
+            similar_products.append({
+                'product_id': product.product_id,
+                'product_name': product.product_name,
+                'score': score
+            })
+
+    # Sort descending by score
+    similar_products.sort(key=lambda x: x['score'], reverse=True)
+    return similar_products
 
 
 def analyze_csv(request, c_id):
+    products_sw = Products.objects.filter(m_status="active").values('source_website').distinct()
+    
     # Fetch the quotation object by ID
     try:
         quotations = Quotations.objects.get(quotation_id=c_id)
@@ -243,18 +279,32 @@ def analyze_csv(request, c_id):
     
     # Construct the full local file path
     file_name = quotations.file_name
-    file_path = os.path.join(settings.BASE_DIR, 'costmoeapp/static', 'quotations', file_name)
+    file_path = os.path.join(settings.BASE_DIR, 'costmoeapp', 'static', 'quotations', file_name)
     
-    try:
-        # Ensure the file exists
-        if not os.path.exists(file_path):
-            return HttpResponse("CSV file not found.", status=404)
+    if not os.path.exists(file_path):
+        return HttpResponse("CSV file not found.", status=404)
 
+    try:
         # Read the CSV file
         with open(file_path, mode='r', encoding='utf-8') as file:
             reader = csv.reader(file)
-            header = next(reader)  # Read the header
-            rows = [row for row in reader]  # Read the rest of the rows
+            header = next(reader)
+            rows = [row for row in reader]
+
+        # Add m_status column if it doesn't exist
+        if 'm_status' not in header:
+            header.append('m_status')
+            for row in rows:
+                row.append('active')
+
+            # Write the updated CSV back
+            with open(file_path, mode='w', newline='', encoding='utf-8') as file:
+                writer = csv.writer(file)
+                writer.writerow(header)
+                writer.writerows(rows)
+            print("Column 'm_status' added.")
+        else:
+            print("Column 'm_status' already exists.")
         
         # Convert CSV rows to list of dictionaries
         products_data = []
@@ -319,11 +369,22 @@ def analyze_csv(request, c_id):
                         standardized_dict[standard_field] = 0.0
                     else:
                         standardized_dict[standard_field] = ''
+            # Add similarity score and similar products
+            product_name = standardized_dict.get('product_name', '')
+            similar_matches = find_similar_products(product_name)
+
+            # Add best match score (or 0 if none found)
+            standardized_dict['similarity_score'] = similar_matches[0]['score'] if similar_matches else 0
+
+            # Add similar products list
+            standardized_dict['similar_products'] = similar_matches
+
             
             products_data.append(standardized_dict)
         
         # Now analyze the products with our function
         analyzed_products = analyze_products(products_data)
+        
 
         # Print the analyzed_products to HTML
         print("Analyzed Products:")
@@ -334,7 +395,9 @@ def analyze_csv(request, c_id):
             'header': header, 
             'rows': rows,
             'products': analyzed_products,  # Send analyzed products to template
-            'quotation': quotations
+            'quotation': quotations,
+            'products_sw' : products_sw,
+            'c_id' : c_id
         })
 
     except Exception as e:
@@ -344,6 +407,85 @@ def analyze_csv(request, c_id):
         return HttpResponse(f"Error: {str(e)}<br><pre>{error_details}</pre>", status=500)
 
 
+
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponseRedirect
+import csv, os
+
+@csrf_exempt
+def bulk_csv_update(request, c_id):
+    if request.method == 'POST':
+        product_ids = request.POST.getlist('product_ids[]')
+        action = request.POST.get('action')
+
+        try:
+            quotation = Quotations.objects.get(quotation_id=c_id)
+        except Quotations.DoesNotExist:
+            return HttpResponse("Quotation not found.", status=404)
+
+        file_path = os.path.join(settings.BASE_DIR, 'costmoeapp', 'static', 'quotations', quotation.file_name)
+        if not os.path.exists(file_path):
+            return HttpResponse("CSV file not found.", status=404)
+
+        # ✅ First: Read data from CSV in read mode
+        updated_rows = []
+        with open(file_path, 'r', encoding='utf-8') as file:
+            reader = csv.reader(file)
+            header = next(reader)
+            updated_rows.append(header)
+            for row in reader:
+                if row and row[0] in product_ids:  # assuming product ID is in column 0
+                    if action == 'Enable':
+                        row[17] = 'Active'
+                    elif action == 'Disable':
+                        row[17] = 'Inactive'
+                    elif action == 'Delete':
+                        continue
+                updated_rows.append(row)
+
+        # ✅ Second: Write updated data back to CSV
+        with open(file_path, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerows(updated_rows)
+
+        return HttpResponseRedirect(request.META.get('HTTP_REFERER', '/'))
+
+
+
+
+@require_POST
+def update_products_status(request):
+    user_id = request.session.get('user_id', 'na')
+
+    product_ids = request.POST.getlist('product_ids[]')
+    action = request.POST.get('action')
+
+    if not product_ids or not action:
+        return redirect('products')  # Change to match your template's name
+
+    if action == 'Monitor':
+        for pid in product_ids:
+            ProductChoose.objects.create(
+                user_id=user_id,
+                product_id=pid,
+                date_time=timezone.now()
+            )
+        messages.success(request, "Monitoring started for selected products.")
+    else:
+        status_map = {
+            'Enable': 'active',
+            'Disable': 'disabled',
+            'Delete': 'delete',
+        }
+
+        new_status = status_map.get(action)
+        if new_status:
+            Products.objects.filter(product_id__in=product_ids).update(m_status=new_status)
+            messages.success(request, f"{action}d selected products.")
+        else:
+            messages.error(request, "Invalid status action selected.")
+
+    return redirect('search')  # Change to match your URL pattern
 
 def analyze_products(products):
     """
@@ -726,32 +868,38 @@ def market_differentiation_view(request):
     all_websites = set()
 
     # Build the table
+    raw_data = defaultdict(list)
+
     for product in products:
-        search = product.search_name
-        website = product.source_website
-        score = product.final_score
-        price = product.price
+        raw_data[product.search_name].append(product)
 
-        if search not in table_data:
-            table_data[search] = {}
+    # Now build table_data using only top 3 sources per search_name
+    for search, entries in raw_data.items():
+        # Sort by final_score descending and take top 3
+        top_entries = sorted(entries, key=lambda x: x.final_score, reverse=True)[:3]
+        
+        table_data[search] = {}
 
-        table_data[search][website] = {
-            'score': score,
-            'price': price,
-            'product_name': product.product_name,
-            'source_url': product.source_url
-        }
-
-        all_websites.add(website)
-
-        # Zero price
-        if price == 0:
-            differentiations['zero_price_urls'].append({
-                'search_name': search,
-                'website': website,
+        for product in top_entries:
+            website = product.source_website
+            table_data[search][website] = {
+                'score': product.final_score,
+                'price': product.price,
+                'currency': product.currency,
                 'product_name': product.product_name,
                 'source_url': product.source_url
-            })
+            }
+
+            all_websites.add(website)
+
+            # Zero price
+            if product.price == 0:
+                differentiations['zero_price_urls'].append({
+                    'search_name': search,
+                    'website': website,
+                    'product_name': product.product_name,
+                    'source_url': product.source_url
+                })
 
     all_websites = sorted(list(all_websites))
 
@@ -1581,8 +1729,7 @@ def home(request):
 def ecom(request):
     user_id = request.session.get('user_id', 'na') 
     username = request.session.get('username', 'na') 
-    products = Products.objects.filter(user_id=user_id, m_status="active").order_by('-product_id')
-
+    products = Products.objects.filter(m_status="active").values('source_website').distinct()
 
 
     context = { 
@@ -1596,7 +1743,7 @@ def ecom(request):
 def ecom_choosen(request):
     user_id = request.session.get('user_id', 'na') 
     username = request.session.get('username', 'na') 
-    products = ProductUserView.objects.filter(user_id=user_id, m_status="active").order_by('-product_id')
+    products = Products.objects.filter(m_status="active").values('source_website').distinct()
 
 
 
