@@ -9,7 +9,7 @@ random_uuid = uuid.uuid4().hex
 
 search = "specific iphone 14"
 shop = "Lazada"
-content = 'only generate array, no other and no descriptions. Searching for two '+search+ 'cases products on '+shop +'Philippines, make an array using python, columns = name, similarity score(how similar to other websites) as decimal, brand, price, in_stock, image link and product link. Follow this format please : products =  { "name": "", "similarity_score": 0.00, "brand": "", "price": 000.00, "in_stock": "yes or no", "image_link": "https://img.lazcdn.com/g/p/a854c4ff07f9f4ffb033c40b66a28af1.png_2200x2200q80.png_.webp", "product_link": "https://www.lazada.com.ph/products/pdp-i4092198413-s22484847434.html" },'
+content = 'only generate array of products, no other and no descriptions. Searching for two '+search+ 'cases products on '+shop +'Philippines, make an array using python, columns = name, similarity score(how similar to other websites) as decimal, brand, price, in_stock, image link and product link. Follow this format please : products =  { "name": "", "similarity_score": 0.00, "brand": "", "price": 000.00, "in_stock": "yes or no", "image_link": "https://img.lazcdn.com/g/p/a854c4ff07f9f4ffb033c40b66a28af1.png_2200x2200q80.png_.webp", "product_link": "https://www.lazada.com.ph/products/pdp-i4092198413-s22484847434.html" },'
 
 url = "https://api.perplexity.ai/chat/completions"
 
